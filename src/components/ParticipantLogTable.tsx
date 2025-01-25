@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { format } from 'date-fns';
+import React, { useState, useEffect } from 'react';
+import { format, startOfWeek } from 'date-fns';
 import { Check, X, ChevronUp, ChevronDown, Dumbbell, Apple, Footprints, Moon } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 interface Log {
   date: string;
@@ -16,6 +17,7 @@ interface Log {
   user: {
     username: string;
   };
+  user_id: string;
 }
 
 interface Props {
@@ -23,9 +25,41 @@ interface Props {
   logs: Log[];
 }
 
+interface WorkoutCount {
+  [key: string]: number;
+}
+
 export default function ParticipantLogTable({ date, logs }: Props) {
   const [sortField, setSortField] = useState<keyof Log>('user');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [weeklyWorkouts, setWeeklyWorkouts] = useState<WorkoutCount>({});
+
+  useEffect(() => {
+    const fetchWeeklyWorkouts = async () => {
+      const weekStart = startOfWeek(date, { weekStartsOn: 1 });
+      const weekStartStr = format(weekStart, 'yyyy-MM-dd');
+      
+      const { data, error } = await supabase
+        .from('daily_logs')
+        .select('user_id, date')
+        .gte('date', weekStartStr)
+        .lte('date', format(date, 'yyyy-MM-dd'))
+        .eq('workout_completed', true);
+
+      if (error) {
+        console.error('Error fetching weekly workouts:', error);
+        return;
+      }
+
+      const counts: WorkoutCount = {};
+      data?.forEach(log => {
+        counts[log.user_id] = (counts[log.user_id] || 0) + 1;
+      });
+      setWeeklyWorkouts(counts);
+    };
+
+    fetchWeeklyWorkouts();
+  }, [date]);
 
   const handleSort = (field: keyof Log) => {
     if (field === sortField) {
@@ -52,12 +86,21 @@ export default function ParticipantLogTable({ date, logs }: Props) {
     return sortDirection === 'asc' ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />;
   };
 
+  const getWorkoutPoints = (log: Log) => {
+    if (!log.workout_completed || !log.workout_duration || log.workout_duration < 30) {
+      return 0;
+    }
+    const workoutCount = weeklyWorkouts[log.user_id] || 0;
+    return workoutCount > 5 ? 10 : 5;
+  };
+
   const calculatePointsBreakdown = (log: Log) => {
     let breakdown = [];
     
-    // Workout points (5 points for first 5 workouts, 10 points for 6th and 7th)
+    // Workout points
     if (log.workout_completed && log.workout_duration && log.workout_duration >= 30) {
-      breakdown.push('+5 workout');
+      const points = getWorkoutPoints(log);
+      breakdown.push(`+${points} workout`);
     }
     
     // Sleep bonus (7+ hours: 5 points)
@@ -168,7 +211,7 @@ export default function ParticipantLogTable({ date, logs }: Props) {
                           <div className="text-xs text-gray-500">No photo</div>
                         )}
                         <div className="text-xs text-green-600">
-                          {log.workout_duration && log.workout_duration >= 30 ? '+5 points' : '0 points'}
+                          {`+${getWorkoutPoints(log)} points`}
                         </div>
                       </>
                     ) : (
